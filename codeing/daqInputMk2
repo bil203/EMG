@@ -1,0 +1,286 @@
+#Billy Harley
+#DAQ Codeing.
+import u3, sys, traceback, time, os, threading, urllib, json, matplotlib, tkinter as tk, pandas as pd, numpy as np, queue, copy
+matplotlib.use("TkAgg")
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg , NavigationToolbar2Tk
+import matplotlib.animation as animation
+from matplotlib import style
+from matplotlib import pyplot as plt
+
+from datetime import datetime
+
+from tkinter import ttk
+
+
+LARGE_FONT = ("Veranda", 12)
+style.use("dark_background")
+
+p = plt.figure(figsize=(11,7), dpi=100)
+a = p.add_subplot(111)
+
+timer = 0
+running = True
+
+def animate(i):
+    pullData = open("Project_Output_Readings.txt", "r+").read()
+    dataList = pullData.split('\n')
+    xList=[]
+    yList=[]
+    
+    for eachLine in dataList:
+        if len(eachLine) > 1:
+           x, y = eachLine.split(',')
+           xList.append(float(x))
+           yList.append(float(y))
+    a.clear()
+    print(xList)
+       
+    #x = np.concatenate(xList)
+    #y = np.concatenate(yList)
+          
+        #simulation
+
+
+        #plot EMG 
+    #plt.locator_params(axis='x', nbins=4)
+    #plt.locator_params(axis='y', nbins=4)
+    plt.ylim(-1.5, 1.5)
+    plt.xlabel('Time (sec)')
+    plt.ylabel('EMG (a.u.)')
+    
+
+    title = "EMG"
+    a.set_title(title)
+
+    a.plot(xList, yList, 'g', label='EMG')
+
+class Controller(object): #creates a function that runs the DAQ and animate in sequence
+    def __init__(self):
+        self.thread1 = None
+        self.stop_threads = threading.Event()
+
+    def loop1(self):
+        while not self.stop_threads.is_set():
+            daqRun()
+            time.sleep(1)
+
+    def combine(self):
+        self.stop_threads.clear()
+        f = open("Project_Output_Readings.txt", 'w+').truncate(0)
+        #close("Project_Output_Readings.txt")
+        self.thread1 = threading.Thread(target = self.loop1)
+        
+        self.thread1.start()
+        
+
+    def stop(self):
+       self.stop_threads.set()
+       self.thread1.join()
+       self.thread1 = None
+       
+
+
+
+class DaqDisplay(tk.Tk):
+
+    def __init__(self, *args, **kwargs):
+        
+        tk.Tk.__init__(self, *args, **kwargs)
+
+        tk.Tk.iconbitmap(self, "Qicon.ico")
+        tk.Tk.wm_title(self, "Input")
+
+        container = tk.Frame(self)
+        container.pack(side="top", fill="both", expand = True)
+        container.grid_rowconfigure(0, weight=1)
+        container.grid_columnconfigure(0, weight=1)
+
+        menubar = tk.Menu(container) # creates a menue bar
+        filemenu = tk.Menu(menubar, tearoff=0)
+        filemenu.add_command(label="Exit", command=shutProgram)
+        menubar.add_cascade(label="File", menu=filemenu)
+
+        tk.Tk.config(self, menu=menubar)
+
+        self.frames = {}
+
+        for F in (warningPage, graphPage):
+
+            frame = F(container, self)
+
+            self.frames[F] = frame
+
+            frame.grid(row=0, column=0, sticky='nsew')
+
+            self.show_frame(warningPage)
+
+    def show_frame(self, cont):
+       frame = self.frames[cont]
+       frame.tkraise()
+
+
+
+
+class warningPage(tk.Frame):
+
+    def __init__(self, parent, controller):
+        tk.Frame.__init__(self,parent)
+        label = tk.Label(self, text="""ALPHA EMG application
+        Use at your own risk. There is no promise
+        of warranty""", font=LARGE_FONT)
+        label.pack(pady=10,padx=10)
+
+        button1 = ttk.Button(self, text="Agree",
+                            command=lambda: controller.show_frame(graphPage))
+        button1.pack()
+
+        button2 = ttk.Button(self, text="Disagree",
+                            command = shutProgram)
+        button2.pack()
+
+
+
+
+class graphPage(tk.Frame):
+
+    
+    def __init__(self, parent, controller):
+        tk.Frame.__init__(self,parent)
+        label = tk.Label(self, text="imput", font=LARGE_FONT)
+        label.pack(pady=10, padx=10)
+
+        C=Controller()
+
+        button0 = ttk.Button(self, text="Run",
+        command = C.combine)
+        button0.pack(side="left")
+
+        button1 = ttk.Button(self, text="Graph",
+        command = ani)
+        button1.pack(side="left")
+
+        button3 = ttk.Button(self, text="Stop",
+                             command= C.stop)
+
+        button3.pack(side="left")
+
+
+        canvas = FigureCanvasTkAgg(p, self)
+        canvas.draw()
+        canvas.get_tk_widget().pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        toolbar = NavigationToolbar2Tk(canvas, self)
+        toolbar.update()
+        canvas._tkcanvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+def daqRun():
+
+    
+    MAX_REQUESTS = None
+    SCAN_FREQUENCY = 5000 # SCAN_FREQUENCY is the scan frequency of stream mode in Hz
+    d = None
+    d = u3.U3()
+
+    #d.configU3() # To learn the if the U3 is an HV
+    d.getCalibrationData() # For applying the proper calibration to readings.
+    d.configIO(FIOAnalog=3) # Set the FIO0 and FIO1 to Analog (d3 = b00000011)
+
+    #print("Configuring U3 stream")
+    d.streamConfig(NumChannels=2, PChannels=[0, 1], NChannels=[31, 31], Resolution=3, ScanFrequency=SCAN_FREQUENCY)
+    d.packetsPerRequest = 6 #Higher number = slower speed, but most likely higher accuracy. Default is 48
+
+    f = open("Project_Output_Readings.txt","a+")
+    g = open("Project_Output_Real_Hz.txt","w+")
+    MAX_REQUESTS = 10
+    #^ can comment uncomment this line to add a max request call to the program
+    #^ Along with the first comments under the for loop
+    #input("Press Enter to begin stream, end with Ctrl + C")
+
+    if d is None:
+        print("""Configure a device first. Please open streamTest.py in a text editor and uncomment the lines for your device. Exiting...""")
+        sys.exit(0)
+
+    try:
+        #print("Start stream")
+        d.streamStart()
+        start = datetime.now()
+        start_time = time.time() # added to document to create time domain
+        #print("Start time is %s" % start)
+
+        missed = 0
+        dataCount = 0
+        packetCount = 0
+
+        for r in d.streamData():
+            if r is not None:
+                # Our stop condition if using MAX_REQUESTS
+                if dataCount >= MAX_REQUESTS:
+                    break
+
+                if r["errors"] != 0:
+                    print("Errors counted: %s ; %s" % (r["errors"], datetime.now()))
+
+                if r["numPackets"] != d.packetsPerRequest:
+                    print("----- UNDERFLOW : %s ; %s" %
+                          (r["numPackets"], datetime.now()))
+
+                if r["missed"] != 0:
+                    missed += r['missed']
+                    print("+++ Missed %s" % r["missed"])
+
+                # Comment out these prints and do something with r
+                #print("Average of %s AIN0, %s AIN1 readings: %s, %s" %
+                      #(len(r["AIN0"]), len(r["AIN1"]), sum(r["AIN0"])/len(r["AIN0"]), sum(r["AIN1"])/len(r["AIN1"])))
+                f.write(str(sum(r["AIN0"])/len(r["AIN0"])))
+                f.write(", " + str(time.time()-start_time))
+                #ar1.append((sum(r["AIN0"])/len(r["AIN0"])))
+                #ar1.append(time.time()-start_time) #writes the time reading was taken to document to input into list
+                f.write("\n")              #this gives me two variables for the graph
+                dataCount += 1
+                packetCount += r['numPackets']
+
+            else:
+                # Got no data back from our read.
+                # This only happens if your stream isn't faster than the USB read
+                # timeout, ~1 sec.
+                print("No data ; %s" % datetime.now())
+    except:
+        print("".join(i for i in traceback.format_exc()))
+    finally:
+        stop = datetime.now()
+        d.streamStop()
+        #print("Stream stopped.\n")
+        d.close()
+
+        sampleTotal = packetCount * d.streamSamplesPerPacket
+
+        scanTotal = sampleTotal / 2  # sampleTotal / NumChannels
+        #print("%s requests with %s packets per request with %s samples per packet = %s samples total." %
+              #(dataCount, (float(packetCount)/dataCount), d.streamSamplesPerPacket, sampleTotal))
+        #print("%s samples were lost due to errors." % missed)
+        #sampleTotal -= missed
+        #print("Adjusted number of samples = %s" % sampleTotal)
+
+        runTime = (stop-start).seconds + float((stop-start).microseconds)/1000000
+        #print("The experiment took %s seconds." % runTime)
+        #print("Actual Scan Rate = %s Hz" % SCAN_FREQUENCY)
+        #print("Timed Scan Rate = %s scans / %s seconds = %s Hz" %
+              #(scanTotal, runTime, float(scanTotal)/runTime))
+        #print("Timed Sample Rate = %s samples / %s seconds = %s Hz" %
+              #(sampleTotal, runTime, float(sampleTotal)/runTime))
+        #f.close()
+        
+        g.write(str((float(sampleTotal)/runTime)/2))
+        g.close()
+        #input("Press Enter to continue...")
+
+
+def shutProgram():
+    app.quit()
+    app.destroy()
+
+ani = animation.FuncAnimation(p, animate, interval=1000)
+
+#kick off eventloop
+app = DaqDisplay()
+app.mainloop()
